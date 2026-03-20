@@ -1,5 +1,10 @@
 import { useState, useEffect, useRef } from "react";
-import { onAuthStateChanged, signInWithPopup, signOut, type User } from "firebase/auth";
+import {
+  onAuthStateChanged,
+  signInWithPopup,
+  signOut,
+  type User,
+} from "firebase/auth";
 import { auth, googleProvider } from "./firebase";
 import { type Node, type Conversation, type BranchTarget } from "./types";
 import Sidebar from "./Sidebar";
@@ -8,7 +13,7 @@ import AccountPage from "./AccountPage";
 import SearchPanel from "./SearchPanel";
 import PromptsPanel from "./PromptsPanel";
 
-const API = "http://localhost:8001";
+const API = import.meta.env.DEV ? "http://localhost:8001" : "";
 
 async function authHeaders(user: User | null): Promise<Record<string, string>> {
   if (!user) return {};
@@ -16,7 +21,11 @@ async function authHeaders(user: User | null): Promise<Record<string, string>> {
   return { Authorization: `Bearer ${token}` };
 }
 
-async function apiFetch(path: string, user: User | null, opts: RequestInit = {}) {
+async function apiFetch(
+  path: string,
+  user: User | null,
+  opts: RequestInit = {},
+) {
   const ah = await authHeaders(user);
   return fetch(`${API}${path}`, {
     credentials: "include",
@@ -24,7 +33,7 @@ async function apiFetch(path: string, user: User | null, opts: RequestInit = {})
     headers: {
       "Content-Type": "application/json",
       ...ah,
-      ...(opts.headers as Record<string, string> ?? {}),
+      ...((opts.headers as Record<string, string>) ?? {}),
     },
   });
 }
@@ -32,7 +41,7 @@ async function apiFetch(path: string, user: User | null, opts: RequestInit = {})
 function getLastPathNode(
   nodes: Record<string, Node>,
   rootNodeId: string | null,
-  activeChildIndex: Record<string, number>
+  activeChildIndex: Record<string, number>,
 ): string | null {
   if (!rootNodeId || !nodes[rootNodeId]) return null;
   let current = rootNodeId;
@@ -54,11 +63,15 @@ export default function App() {
 
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [currentConvId, setCurrentConvId] = useState<string | null>(null);
-  const [currentConvModel, setCurrentConvModel] = useState("groq/llama-3.3-70b-versatile");
+  const [currentConvModel, setCurrentConvModel] = useState(
+    "groq/llama-3.3-70b-versatile",
+  );
 
   const [nodes, setNodes] = useState<Record<string, Node>>({});
   const [rootNodeId, setRootNodeId] = useState<string | null>(null);
-  const [activeChildIndex, setActiveChildIndex] = useState<Record<string, number>>({});
+  const [activeChildIndex, setActiveChildIndex] = useState<
+    Record<string, number>
+  >({});
 
   const [streaming, setStreaming] = useState(false);
   const [branchTarget, setBranchTarget] = useState<BranchTarget | null>(null);
@@ -74,34 +87,57 @@ export default function App() {
   const [panel, setPanel] = useState<"chat" | "search" | "prompts">("chat");
 
   // Active system prompt
-  const [activeSystemPrompt, setActiveSystemPrompt] = useState<string | null>(null);
+  const [activeSystemPrompt, setActiveSystemPrompt] = useState<string | null>(
+    null,
+  );
+
+  // Providers with a usable key (server env or BYOK)
+  const [availableProviders, setAvailableProviders] = useState<string[]>([]);
 
   // Restore active system prompt from Firestore when user logs in
   useEffect(() => {
     if (!user) return;
-    user.getIdToken().then((token) =>
-      fetch(`${API}/api/prompts`, {
-        credentials: "include",
-        headers: { Authorization: `Bearer ${token}` },
+    user
+      .getIdToken()
+      .then((token) =>
+        fetch(`${API}/api/prompts`, {
+          credentials: "include",
+          headers: { Authorization: `Bearer ${token}` },
+        }),
+      )
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!data?.active_prompt_id) return;
+        const active = (data.prompts ?? []).find(
+          (p: { id: string; content: string }) =>
+            p.id === data.active_prompt_id,
+        );
+        if (active) setActiveSystemPrompt(active.content);
       })
-    ).then((res) => res.ok ? res.json() : null)
-     .then((data) => {
-       if (!data?.active_prompt_id) return;
-       const active = (data.prompts ?? []).find(
-         (p: { id: string; content: string }) => p.id === data.active_prompt_id
-       );
-       if (active) setActiveSystemPrompt(active.content);
-     })
-     .catch(() => {});
+      .catch(() => {});
   }, [user]);
 
   useEffect(() => onAuthStateChanged(auth, setUser), []);
 
   useEffect(() => {
     fetch(`${API}/api/session`, { credentials: "include" }).then(() =>
-      setSessionReady(true)
+      setSessionReady(true),
     );
   }, []);
+
+  // Refresh available providers whenever auth state changes
+  useEffect(() => {
+    async function fetchAvailable() {
+      try {
+        const res = await apiFetch("/api/keys/available", user);
+        if (res.ok) {
+          const data = await res.json();
+          setAvailableProviders(data.available ?? []);
+        }
+      } catch {}
+    }
+    fetchAvailable();
+  }, [user]);
 
   useEffect(() => {
     if (sessionReady) loadConversations();
@@ -157,7 +193,9 @@ export default function App() {
 
   async function deleteConversation(convId: string) {
     try {
-      await apiFetch(`/api/chat/conversations/${convId}`, user, { method: "DELETE" });
+      await apiFetch(`/api/chat/conversations/${convId}`, user, {
+        method: "DELETE",
+      });
       setConversations((prev) => prev.filter((c) => c.id !== convId));
       if (currentConvId === convId) {
         setCurrentConvId(null);
@@ -167,7 +205,11 @@ export default function App() {
     } catch {}
   }
 
-  async function sendMessage(prompt: string, parentNodeId: string | null, convId: string) {
+  async function sendMessage(
+    prompt: string,
+    parentNodeId: string | null,
+    convId: string,
+  ) {
     if (!convId || streaming || !prompt.trim()) return;
     setStreaming(true);
     setBranchTarget(null);
@@ -198,7 +240,10 @@ export default function App() {
     });
 
     if (parentNodeId) {
-      setActiveChildIndex((prev) => ({ ...prev, [parentNodeId]: parentChildCount }));
+      setActiveChildIndex((prev) => ({
+        ...prev,
+        [parentNodeId]: parentChildCount,
+      }));
     }
     if (!rootNodeId) setRootNodeId(tempId);
 
@@ -210,7 +255,12 @@ export default function App() {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json", ...ah },
-        body: JSON.stringify({ prompt, parent_node_id: parentNodeId, model: currentConvModel, system_prompt: activeSystemPrompt ?? undefined }),
+        body: JSON.stringify({
+          prompt,
+          parent_node_id: parentNodeId,
+          model: currentConvModel,
+          system_prompt: activeSystemPrompt ?? undefined,
+        }),
       });
 
       if (!res.body) throw new Error("No response body");
@@ -245,15 +295,19 @@ export default function App() {
             } else if (event.type === "title") {
               setConversations((prev) =>
                 prev.map((c) =>
-                  c.id === convId ? { ...c, title: event.title } : c
-                )
+                  c.id === convId ? { ...c, title: event.title } : c,
+                ),
               );
             } else if (event.type === "error") {
               setNodes((prev) => {
                 if (!prev[tempId]) return prev;
                 return {
                   ...prev,
-                  [tempId]: { ...prev[tempId], is_streaming: false, response: `Error: ${event.message}` },
+                  [tempId]: {
+                    ...prev[tempId],
+                    is_streaming: false,
+                    response: `Error: ${event.message}`,
+                  },
                 };
               });
               setStreaming(false);
@@ -267,7 +321,11 @@ export default function App() {
         if (!prev[tempId]) return prev;
         return {
           ...prev,
-          [tempId]: { ...prev[tempId], is_streaming: false, response: `Error: ${e}` },
+          [tempId]: {
+            ...prev[tempId],
+            is_streaming: false,
+            response: `Error: ${e}`,
+          },
         };
       });
       setStreaming(false);
@@ -286,13 +344,14 @@ export default function App() {
           next[parentNodeId] = {
             ...next[parentNodeId],
             children_ids: next[parentNodeId].children_ids.map((id) =>
-              id === tempId ? finalId : id
+              id === tempId ? finalId : id,
             ),
           };
         }
         return next;
       });
       if (!parentNodeId) setRootNodeId(finalId);
+      setBranchTarget({ nodeId: finalId, mode: "child" });
     }
 
     setStreaming(false);
@@ -306,7 +365,10 @@ export default function App() {
       try {
         const res = await apiFetch("/api/chat/conversations", user, {
           method: "POST",
-          body: JSON.stringify({ title: "New Conversation", model: currentConvModel }),
+          body: JSON.stringify({
+            title: "New Conversation",
+            model: currentConvModel,
+          }),
         });
         if (!res.ok) return;
         const conv = await res.json();
@@ -328,7 +390,9 @@ export default function App() {
           },
           ...prev,
         ]);
-      } catch { return; }
+      } catch {
+        return;
+      }
     }
     let parentId: string | null = null;
     if (branchTarget) {
@@ -340,6 +404,60 @@ export default function App() {
       parentId = getLastPathNode(nodes, rootNodeId, activeChildIndex);
     }
     if (convId) sendMessage(prompt, parentId, convId);
+  }
+
+  async function handleDeleteNode(nodeId: string) {
+    if (!currentConvId) return;
+    const node = nodes[nodeId];
+    if (!node) return;
+
+    try {
+      const res = await apiFetch(
+        `/api/chat/conversations/${currentConvId}/nodes/${nodeId}`,
+        user,
+        { method: "DELETE" },
+      );
+      if (!res.ok) return;
+    } catch {
+      return;
+    }
+
+    const parentId = node.parent_id;
+    const childrenIds = node.children_ids ?? [];
+
+    setNodes((prev) => {
+      const next = { ...prev };
+      delete next[nodeId];
+      // Re-parent children
+      for (const cid of childrenIds) {
+        if (next[cid]) {
+          next[cid] = { ...next[cid], parent_id: parentId };
+        }
+      }
+      // Update parent's children_ids: replace deleted node with its children
+      if (parentId && next[parentId]) {
+        const oldChildren = next[parentId].children_ids;
+        const idx = oldChildren.indexOf(nodeId);
+        const newChildren = [...oldChildren];
+        if (idx >= 0) {
+          newChildren.splice(idx, 1, ...childrenIds);
+        } else {
+          newChildren.push(...childrenIds);
+        }
+        next[parentId] = { ...next[parentId], children_ids: newChildren };
+      }
+      return next;
+    });
+
+    // If deleted node was root, promote first child
+    if (rootNodeId === nodeId) {
+      setRootNodeId(childrenIds.length > 0 ? childrenIds[0] : null);
+    }
+
+    // Clear branch target if it pointed to the deleted node
+    if (branchTarget?.nodeId === nodeId) {
+      setBranchTarget(parentId ? { nodeId: parentId, mode: "child" } : null);
+    }
   }
 
   function handleSignIn() {
@@ -359,21 +477,34 @@ export default function App() {
   return (
     <div className="flex h-screen bg-gray-950 text-gray-100 overflow-hidden">
       {/* Sidebar with resizable width */}
-      <div style={{ width: sidebarWidth, flexShrink: 0 }} className="relative flex">
+      <div
+        style={{ width: sidebarWidth, flexShrink: 0 }}
+        className="relative flex"
+      >
         <Sidebar
           user={user}
           conversations={conversations}
           currentConvId={currentConvId}
           activePanel={panel}
           hasActivePrompt={activeSystemPrompt !== null}
-          onSelect={(id) => { selectConversation(id); setPanel("chat"); }}
-          onNew={() => { newConversation(); setPanel("chat"); }}
+          onSelect={(id) => {
+            selectConversation(id);
+            setPanel("chat");
+          }}
+          onNew={() => {
+            newConversation();
+            setPanel("chat");
+          }}
           onDelete={deleteConversation}
           onSignIn={handleSignIn}
           onSignOut={handleSignOut}
           onAccount={() => setShowAccount(true)}
-          onOpenSearch={() => setPanel((p) => p === "search" ? "chat" : "search")}
-          onOpenPrompts={() => setPanel((p) => p === "prompts" ? "chat" : "prompts")}
+          onOpenSearch={() =>
+            setPanel((p) => (p === "search" ? "chat" : "search"))
+          }
+          onOpenPrompts={() =>
+            setPanel((p) => (p === "prompts" ? "chat" : "prompts"))
+          }
         />
         {/* Drag handle */}
         <div
@@ -390,7 +521,10 @@ export default function App() {
         <SearchPanel
           user={user}
           conversations={conversations}
-          onSelect={(id) => { selectConversation(id); setPanel("chat"); }}
+          onSelect={(id) => {
+            selectConversation(id);
+            setPanel("chat");
+          }}
           onClose={() => setPanel("chat")}
         />
       )}
@@ -410,12 +544,14 @@ export default function App() {
           branchTarget={branchTarget}
           model={currentConvModel}
           user={user}
+          availableProviders={availableProviders}
           onModelChange={setCurrentConvModel}
           onNavigateSibling={(parentId: string, idx: number) =>
             setActiveChildIndex((prev) => ({ ...prev, [parentId]: idx }))
           }
           onSetBranchTarget={setBranchTarget}
           onSend={handleSend}
+          onDeleteNode={handleDeleteNode}
           onSignIn={handleSignIn}
         />
       )}
