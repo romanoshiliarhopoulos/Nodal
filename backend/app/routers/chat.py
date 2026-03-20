@@ -7,7 +7,7 @@ litellm._turn_on_debug()
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from firebase_admin import firestore as fs
-from google.cloud.firestore_v1 import ArrayUnion
+from google.cloud.firestore_v1 import ArrayRemove, ArrayUnion
 
 from app.auth import get_user_id
 from app.config import settings
@@ -187,6 +187,58 @@ async def delete_conversation(conv_id: str, user_id: str = Depends(get_user_id))
 
     db.collection("conversations").document(conv_id).delete()
     return {"id": conv_id, "status": "deleted"}
+
+
+@router.delete("/conversations/{conv_id}/nodes/{node_id}")
+async def delete_node(conv_id: str, node_id: str, user_id: str = Depends(get_user_id)):
+    """
+    Delete a single node and re-parent its children to the deleted node's parent.
+    If the deleted node is the root, the first child becomes the new root.
+    """
+    db = get_db()
+    conv_doc = db.collection("conversations").document(conv_id).get()
+    _verify_ownership(conv_doc, user_id)
+
+    nodes_col = db.collection("conversations").document(conv_id).collection("nodes")
+    node_doc = nodes_col.document(node_id).get()
+    if not node_doc.exists:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    node = node_doc.to_dict()
+    parent_id = node.get("parent_id")
+    children_ids = node.get("children_ids", [])
+
+    # Re-parent each child to point to the deleted node's parent
+    for child_id in children_ids:
+        nodes_col.document(child_id).update({"parent_id": parent_id})
+
+    if parent_id:
+        # Remove deleted node from parent's children, add its children instead
+        parent_ref = nodes_col.document(parent_id)
+        parent_ref.update({"children_ids": ArrayRemove([node_id])})
+        if children_ids:
+            parent_ref.update({"children_ids": ArrayUnion(children_ids)})
+    else:
+        # Deleted node was root — promote first child as new root
+        conv_ref = db.collection("conversations").document(conv_id)
+        if children_ids:
+            conv_ref.update({"root_node_id": children_ids[0]})
+        else:
+            conv_ref.update({"root_node_id": None})
+
+    # Delete the node document itself
+    nodes_col.document(node_id).delete()
+
+    # Clean up the corresponding search entry
+    for msg in db.collection("messages").where("node_id", "==", node_id).stream():
+        msg.reference.delete()
+
+    return {
+        "id": node_id,
+        "status": "deleted",
+        "parent_id": parent_id,
+        "children_ids": children_ids,
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import type { User } from "firebase/auth";
 
-const API = "http://localhost:8001";
+const API = import.meta.env.DEV ? "http://localhost:8001" : "";
 
 export interface SystemPrompt {
   id: string;

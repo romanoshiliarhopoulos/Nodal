@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import type { User } from "firebase/auth";
 import type { Node, BranchTarget } from "./types";
 import ReactMarkdown from "react-markdown";
+import TreeView, { type TreeViewHandle } from "./TreeView";
 
 export const MODEL_GROUPS = [
   {
@@ -74,10 +75,12 @@ interface ChatViewProps {
   branchTarget: BranchTarget | null;
   model: string;
   user: User | null;
+  availableProviders: string[];
   onModelChange: (m: string) => void;
   onNavigateSibling: (parentId: string, idx: number) => void;
   onSetBranchTarget: (t: BranchTarget | null) => void;
   onSend: (prompt: string) => void;
+  onDeleteNode: (nodeId: string) => void;
   onSignIn: () => void;
 }
 
@@ -147,12 +150,21 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+const PROVIDER_KEY_ID: Record<string, string> = {
+  Groq: "groq",
+  Google: "gemini",
+  OpenAI: "openai",
+  Anthropic: "anthropic",
+};
+
 function ModelSelector({
   model,
   onChange,
+  availableProviders,
 }: {
   model: string;
   onChange: (m: string) => void;
+  availableProviders: string[];
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -207,43 +219,56 @@ function ModelSelector({
       </button>
 
       {open && (
-        <div className="absolute bottom-full mb-1 left-0 z-20 w-56 rounded-xl border border-gray-700 bg-gray-900 shadow-xl overflow-hidden">
+        <div className="absolute top-full mt-1 left-0 z-20 w-56 rounded-xl border border-gray-700 bg-gray-900 shadow-xl overflow-hidden flex flex-col" style={{ maxHeight: "220px" }}>
           {/* Provider tabs */}
-          <div className="flex border-b border-gray-800">
-            {MODEL_GROUPS.map((g) => (
-              <button
-                key={g.provider}
-                type="button"
-                onClick={() => setActiveProvider(g.provider)}
-                className={`flex-1 py-2 text-[10px] font-medium transition-colors ${
-                  activeProvider === g.provider
-                    ? "text-indigo-400 border-b-2 border-indigo-500 bg-indigo-500/5"
-                    : "text-gray-500 hover:text-gray-300"
-                }`}
-              >
-                {g.provider}
-              </button>
-            ))}
+          <div className="flex border-b border-gray-800 shrink-0">
+            {MODEL_GROUPS.map((g) => {
+              const keyId = PROVIDER_KEY_ID[g.provider];
+              const disabled = !availableProviders.includes(keyId);
+              return (
+                <button
+                  key={g.provider}
+                  type="button"
+                  onClick={() => !disabled && setActiveProvider(g.provider)}
+                  disabled={disabled}
+                  className={`flex-1 py-2 text-[10px] font-medium transition-colors ${
+                    disabled
+                      ? "text-gray-700 cursor-not-allowed"
+                      : activeProvider === g.provider
+                        ? "text-indigo-400 border-b-2 border-indigo-500 bg-indigo-500/5"
+                        : "text-gray-500 hover:text-gray-300"
+                  }`}
+                >
+                  {g.provider}
+                </button>
+              );
+            })}
           </div>
           {/* Model list */}
-          <div className="py-1">
-            {visibleModels.map((m2) => (
-              <button
-                key={m2.id}
-                type="button"
-                onClick={() => {
-                  onChange(m2.id);
-                  setOpen(false);
-                }}
-                className={`w-full text-left px-3 py-2 text-xs transition-colors ${
-                  m2.id === model
-                    ? "text-indigo-400 bg-indigo-500/10"
-                    : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"
-                }`}
-              >
-                {m2.label}
-              </button>
-            ))}
+          <div className="py-1 overflow-y-auto">
+            {visibleModels.map((m2) => {
+              const keyId = PROVIDER_KEY_ID[activeProvider];
+              const disabled = !availableProviders.includes(keyId);
+              return (
+                <button
+                  key={m2.id}
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => {
+                    if (!disabled) { onChange(m2.id); setOpen(false); }
+                  }}
+                  className={`w-full text-left px-3 py-2 text-xs transition-colors ${
+                    disabled
+                      ? "text-gray-700 cursor-not-allowed"
+                      : m2.id === model
+                        ? "text-indigo-400 bg-indigo-500/10"
+                        : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"
+                  }`}
+                >
+                  {m2.label}
+                </button>
+              );
+            })}
           </div>
         </div>
       )}
@@ -261,6 +286,7 @@ function InputRow({
   model,
   onModelChange,
   streaming,
+  availableProviders,
   large = false,
 }: {
   value: string;
@@ -272,6 +298,7 @@ function InputRow({
   model: string;
   onModelChange: (m: string) => void;
   streaming: boolean;
+  availableProviders: string[];
   large?: boolean;
 }) {
   return (
@@ -282,12 +309,12 @@ function InputRow({
         onKeyDown={onKeyDown}
         placeholder={placeholder}
         disabled={disabled}
-        rows={3}
+        rows={large ? 3 : 2}
         className="w-full resize-none rounded-xl border border-gray-700 bg-gray-900 px-4 pt-3 pb-8 pr-12 text-sm text-gray-100 placeholder-gray-600 focus:outline-none focus:border-gray-600 disabled:opacity-50 transition-colors leading-relaxed"
-        style={{ minHeight: large ? "200px" : "80px" }}
+        style={{ minHeight: large ? "150px" : "52px" }}
       />
       <div className="absolute bottom-2 left-3">
-        <ModelSelector model={model} onChange={onModelChange} />
+        <ModelSelector model={model} onChange={onModelChange} availableProviders={availableProviders} />
       </div>
       <button
         type="button"
@@ -346,6 +373,7 @@ function WelcomeScreen({
   streaming,
   user,
   onSignIn,
+  availableProviders,
 }: {
   model: string;
   onModelChange: (m: string) => void;
@@ -353,6 +381,7 @@ function WelcomeScreen({
   streaming: boolean;
   user: User | null;
   onSignIn: () => void;
+  availableProviders: string[];
 }) {
   const [phraseIdx, setPhraseIdx] = useState(0);
   const [phraseKey, setPhraseKey] = useState(0);
@@ -425,6 +454,7 @@ function WelcomeScreen({
             model={model}
             onModelChange={onModelChange}
             streaming={streaming}
+            availableProviders={availableProviders}
             large
           />
         </div>
@@ -440,7 +470,10 @@ interface NodeCardProps {
   streaming: boolean;
   onNavigateSibling: (parentId: string, idx: number) => void;
   onSetBranchTarget: (t: BranchTarget | null) => void;
+  onDeleteNode: (nodeId: string) => void;
 }
+
+const PROMPT_COLLAPSE_THRESHOLD = 300;
 
 function NodeCard({
   node,
@@ -449,7 +482,11 @@ function NodeCard({
   streaming,
   onNavigateSibling,
   onSetBranchTarget,
+  onDeleteNode,
 }: NodeCardProps) {
+  const isLongPrompt = node.prompt.length > PROMPT_COLLAPSE_THRESHOLD;
+  const [promptExpanded, setPromptExpanded] = useState(false);
+
   const isChildTarget =
     branchTarget?.nodeId === node.id && branchTarget.mode === "child";
   const isSiblingTarget =
@@ -521,48 +558,53 @@ function NodeCard({
             <span className="text-xs font-medium text-indigo-400 mt-0.5 shrink-0">
               You
             </span>
-            <p className="text-sm text-gray-200 whitespace-pre-wrap leading-relaxed flex-1">
-              {node.prompt}
+            <p className="text-sm text-gray-200 whitespace-pre-wrap leading-relaxed flex-1 min-w-0">
+              {isLongPrompt && !promptExpanded
+                ? node.prompt.slice(0, PROMPT_COLLAPSE_THRESHOLD) + "..."
+                : node.prompt}
             </p>
           </div>
+          {isLongPrompt && (
+            <button
+              onClick={() => setPromptExpanded((v) => !v)}
+              className="mt-1 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+            >
+              {promptExpanded ? "Show less" : "Show more"}
+            </button>
+          )}
         </div>
 
         <div className="border-t border-gray-800" />
 
         {/* Response */}
         <div className="px-4 pt-2 pb-1">
-          <div className="flex items-start gap-2">
-            <span className="text-xs font-medium text-emerald-400 mt-0.5 shrink-0">
-              AI
-            </span>
-            <div className="text-sm text-gray-300 leading-relaxed prose prose-sm prose-invert max-w-none flex-1">
-              {node.response ? (
-                <>
-                  <ReactMarkdown>{node.response}</ReactMarkdown>
-                  {node.is_streaming && <StreamingCursor />}
-                </>
-              ) : node.is_streaming ? (
-                <span className="inline-flex items-center gap-1.5 text-gray-500 italic text-xs">
-                  <span className="flex gap-0.5">
-                    <span
-                      className="w-1 h-1 rounded-full bg-gray-500 animate-bounce"
-                      style={{ animationDelay: "0ms" }}
-                    />
-                    <span
-                      className="w-1 h-1 rounded-full bg-gray-500 animate-bounce"
-                      style={{ animationDelay: "150ms" }}
-                    />
-                    <span
-                      className="w-1 h-1 rounded-full bg-gray-500 animate-bounce"
-                      style={{ animationDelay: "300ms" }}
-                    />
-                  </span>
-                  Thinking
+          <div className="text-sm text-gray-300 leading-relaxed prose prose-sm prose-invert max-w-none">
+            {node.response ? (
+              <>
+                <ReactMarkdown>{node.response}</ReactMarkdown>
+                {node.is_streaming && <StreamingCursor />}
+              </>
+            ) : node.is_streaming ? (
+              <span className="inline-flex items-center gap-1.5 text-gray-500 italic text-xs">
+                <span className="flex gap-0.5">
+                  <span
+                    className="w-1 h-1 rounded-full bg-gray-500 animate-bounce"
+                    style={{ animationDelay: "0ms" }}
+                  />
+                  <span
+                    className="w-1 h-1 rounded-full bg-gray-500 animate-bounce"
+                    style={{ animationDelay: "150ms" }}
+                  />
+                  <span
+                    className="w-1 h-1 rounded-full bg-gray-500 animate-bounce"
+                    style={{ animationDelay: "300ms" }}
+                  />
                 </span>
-              ) : (
-                <span className="text-gray-600 italic">No response</span>
-              )}
-            </div>
+                Thinking
+              </span>
+            ) : (
+              <span className="text-gray-600 italic">No response</span>
+            )}
           </div>
         </div>
 
@@ -575,6 +617,16 @@ function NodeCard({
             {node.response && !node.is_streaming && (
               <CopyButton text={node.response} />
             )}
+            <button
+              onClick={() => {
+                if (!streaming) onDeleteNode(node.id);
+              }}
+              disabled={streaming || node.is_streaming}
+              title="Delete node"
+              className="opacity-0 group-hover:opacity-100 flex items-center gap-1 px-2 py-0.5 rounded text-xs transition-all disabled:cursor-not-allowed text-gray-600 hover:text-red-400 hover:bg-gray-800"
+            >
+              delete
+            </button>
             <button
               onClick={() => {
                 if (!streaming)
@@ -599,6 +651,137 @@ function NodeCard({
   );
 }
 
+type ViewMode = "chat" | "tree";
+
+function ViewToggle({
+  mode,
+  onChange,
+}: {
+  mode: ViewMode;
+  onChange: (m: ViewMode) => void;
+}) {
+  return (
+    <div className="flex items-center bg-gray-900/80 backdrop-blur border border-gray-800 rounded-lg p-0.5">
+      <button
+        onClick={() => onChange("chat")}
+        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs transition-colors ${
+          mode === "chat"
+            ? "bg-gray-800 text-gray-200"
+            : "text-gray-500 hover:text-gray-300"
+        }`}
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <rect x="1" y="1" width="10" height="2.5" rx="1" stroke="currentColor" strokeWidth="0.9" />
+          <rect x="1" y="4.75" width="10" height="2.5" rx="1" stroke="currentColor" strokeWidth="0.9" />
+          <rect x="1" y="8.5" width="10" height="2.5" rx="1" stroke="currentColor" strokeWidth="0.9" />
+        </svg>
+        Chat
+      </button>
+      <button
+        onClick={() => onChange("tree")}
+        className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs transition-colors ${
+          mode === "tree"
+            ? "bg-gray-800 text-gray-200"
+            : "text-gray-500 hover:text-gray-300"
+        }`}
+      >
+        <svg width="12" height="12" viewBox="0 0 12 12" fill="none">
+          <circle cx="6" cy="1.5" r="1.2" stroke="currentColor" strokeWidth="0.9" />
+          <circle cx="2.5" cy="6" r="1.2" stroke="currentColor" strokeWidth="0.9" />
+          <circle cx="9.5" cy="6" r="1.2" stroke="currentColor" strokeWidth="0.9" />
+          <circle cx="2.5" cy="10.5" r="1.2" stroke="currentColor" strokeWidth="0.9" />
+          <circle cx="9.5" cy="10.5" r="1.2" stroke="currentColor" strokeWidth="0.9" />
+          <line x1="6" y1="2.7" x2="2.5" y2="4.8" stroke="currentColor" strokeWidth="0.9" />
+          <line x1="6" y1="2.7" x2="9.5" y2="4.8" stroke="currentColor" strokeWidth="0.9" />
+          <line x1="2.5" y1="7.2" x2="2.5" y2="9.3" stroke="currentColor" strokeWidth="0.9" />
+          <line x1="9.5" y1="7.2" x2="9.5" y2="9.3" stroke="currentColor" strokeWidth="0.9" />
+        </svg>
+        Tree
+      </button>
+    </div>
+  );
+}
+
+function ZoomControls({
+  zoom,
+  zoomTo,
+}: {
+  zoom: number;
+  zoomTo: (z: number) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing && inputRef.current) {
+      inputRef.current.focus();
+      inputRef.current.select();
+    }
+  }, [editing]);
+
+  function commitEdit() {
+    const parsed = parseInt(editValue, 10);
+    if (!isNaN(parsed) && parsed >= 10 && parsed <= 300) {
+      zoomTo(parsed / 100);
+    }
+    setEditing(false);
+  }
+
+  return (
+    <div className="flex items-center gap-0.5 bg-gray-900/80 backdrop-blur border border-gray-800 rounded-lg px-1 py-0.5">
+      <button
+        onClick={() => zoomTo(Math.max(0.15, zoom * 0.8))}
+        className="w-6 h-6 flex items-center justify-center text-gray-400 hover:text-gray-200 rounded hover:bg-gray-800 transition-colors text-xs"
+      >
+        -
+      </button>
+      {editing ? (
+        <input
+          ref={inputRef}
+          type="text"
+          value={editValue}
+          onChange={(e) => setEditValue(e.target.value)}
+          onBlur={commitEdit}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") commitEdit();
+            if (e.key === "Escape") setEditing(false);
+          }}
+          className="w-10 text-center text-[10px] text-gray-300 bg-gray-800 rounded px-0.5 py-0.5 outline-none border border-gray-600"
+        />
+      ) : (
+        <button
+          onClick={() => {
+            setEditValue(String(Math.round(zoom * 100)));
+            setEditing(true);
+          }}
+          className="text-[10px] text-gray-500 hover:text-gray-300 w-10 text-center select-none py-0.5 rounded hover:bg-gray-800 transition-colors"
+          title="Click to enter custom zoom"
+        >
+          {Math.round(zoom * 100)}%
+        </button>
+      )}
+      <button
+        onClick={() => zoomTo(Math.min(2.5, zoom * 1.2))}
+        className="w-6 h-6 flex items-center justify-center text-gray-400 hover:text-gray-200 rounded hover:bg-gray-800 transition-colors text-xs"
+      >
+        +
+      </button>
+      <button
+        onClick={() => zoomTo(1)}
+        className={`w-6 h-6 flex items-center justify-center rounded transition-colors text-[9px] font-medium ${
+          Math.abs(zoom - 1) < 0.01
+            ? "text-gray-700 cursor-default"
+            : "text-gray-400 hover:text-gray-200 hover:bg-gray-800"
+        }`}
+        title="Reset to 100%"
+      >
+        1:1
+      </button>
+    </div>
+  );
+}
+
 export default function ChatView({
   nodes,
   rootNodeId,
@@ -607,21 +790,49 @@ export default function ChatView({
   branchTarget,
   model,
   user,
+  availableProviders,
   onModelChange,
   onNavigateSibling,
   onSetBranchTarget,
   onSend,
+  onDeleteNode,
   onSignIn,
 }: ChatViewProps) {
   const [input, setInput] = useState("");
+  const [viewMode, setViewMode] = useState<ViewMode>("chat");
+  const [treeZoom, setTreeZoom] = useState(1);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const treeRef = useRef<TreeViewHandle>(null);
+
+  // When switching tree→chat with a selected node, update activeChildIndex
+  // so the chat path follows root → selected node
+  function handleViewModeChange(newMode: ViewMode) {
+    if (newMode === "chat" && viewMode === "tree" && branchTarget?.mode === "child") {
+      const targetId = branchTarget.nodeId;
+      let childId = targetId;
+      let current = nodes[targetId];
+      while (current?.parent_id) {
+        const parent = nodes[current.parent_id];
+        if (!parent) break;
+        const idx = parent.children_ids.indexOf(childId);
+        if (idx >= 0) {
+          onNavigateSibling(parent.id, idx);
+        }
+        childId = parent.id;
+        current = parent;
+      }
+    }
+    setViewMode(newMode);
+  }
 
   const path = computePath(nodes, rootNodeId, activeChildIndex);
   const isEmpty = path.length === 0 && !streaming;
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [path.length, streaming]);
+    if (viewMode === "chat") {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [path.length, streaming, viewMode]);
 
   function handleSubmit() {
     if (!input.trim() || streaming) return;
@@ -665,6 +876,7 @@ export default function ChatView({
         streaming={streaming}
         user={user}
         onSignIn={onSignIn}
+        availableProviders={availableProviders}
       />
     );
   }
@@ -672,53 +884,84 @@ export default function ChatView({
   return (
     <div className="flex flex-col flex-1 min-w-0 h-full">
       {/* Top bar */}
-      <div className="flex items-center justify-end gap-3 px-5 py-2.5 border-b border-gray-800/60">
+      <div className="flex items-center justify-end gap-3 px-5 py-2.5">
         {!user && <SignInButton onSignIn={onSignIn} />}
       </div>
 
-      {/* Thread */}
-      <div className="flex-1 overflow-y-auto px-4 py-6">
-        <div className="max-w-2xl mx-auto space-y-4">
-          {path.map((node) => (
-            <NodeCard
-              key={node.id}
-              node={node}
-              nodes={nodes}
-              branchTarget={branchTarget}
-              streaming={streaming}
-              onNavigateSibling={onNavigateSibling}
-              onSetBranchTarget={onSetBranchTarget}
-            />
-          ))}
-          <div ref={bottomRef} />
+      {/* Content area — chat or tree */}
+      {viewMode === "chat" ? (
+        <div className="flex-1 overflow-y-auto px-4 py-6">
+          <div className="max-w-2xl mx-auto space-y-4">
+            {path.map((node) => (
+              <NodeCard
+                key={node.id}
+                node={node}
+                nodes={nodes}
+                branchTarget={branchTarget}
+                streaming={streaming}
+                onNavigateSibling={onNavigateSibling}
+                onSetBranchTarget={onSetBranchTarget}
+                onDeleteNode={onDeleteNode}
+              />
+            ))}
+            <div ref={bottomRef} />
+          </div>
         </div>
-      </div>
+      ) : (
+        <TreeView
+          ref={treeRef}
+          nodes={nodes}
+          rootNodeId={rootNodeId}
+          activeChildIndex={activeChildIndex}
+          streaming={streaming}
+          branchTarget={branchTarget}
+          onSetBranchTarget={onSetBranchTarget}
+          onNavigateSibling={onNavigateSibling}
+          onDeleteNode={onDeleteNode}
+          zoom={treeZoom}
+          onZoomChange={setTreeZoom}
+        />
+      )}
 
-      {/* Input */}
+      {/* Input + controls */}
       <div className="border-gray-800 px-4 py-5">
-        <div className="max-w-2xl mx-auto">
-          {branchLabel && (
-            <div className="flex items-center justify-between mb-2 px-1">
-              <span className="text-xs text-indigo-400">{branchLabel}</span>
-              <button
-                onClick={() => onSetBranchTarget(null)}
-                className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
-              >
-                cancel
-              </button>
-            </div>
-          )}
-          <InputRow
-            value={input}
-            onChange={handleChange}
-            onSubmit={handleSubmit}
-            onKeyDown={handleKeyDown}
-            disabled={streaming}
-            placeholder={streaming ? "Waiting for response…" : "Message"}
-            model={model}
-            onModelChange={onModelChange}
-            streaming={streaming}
-          />
+        <div className="flex items-end gap-3">
+          {/* Zoom controls — pinned left, only visible in tree mode */}
+          <div className={`shrink-0 pb-1 ${viewMode === "tree" ? "" : "invisible"}`}>
+            <ZoomControls zoom={treeZoom} zoomTo={(z) => treeRef.current?.zoomTo(z)} />
+          </div>
+
+          {/* Input area — centered, capped width */}
+          <div className="flex-1 min-w-0 max-w-2xl mx-auto">
+            {branchLabel && (
+              <div className="flex items-center justify-between mb-2 px-1">
+                <span className="text-xs text-indigo-400">{branchLabel}</span>
+                <button
+                  onClick={() => onSetBranchTarget(null)}
+                  className="text-xs text-gray-600 hover:text-gray-400 transition-colors"
+                >
+                  cancel
+                </button>
+              </div>
+            )}
+            <InputRow
+              value={input}
+              onChange={handleChange}
+              onSubmit={handleSubmit}
+              onKeyDown={handleKeyDown}
+              disabled={streaming}
+              placeholder={streaming ? "Waiting for response..." : "Message"}
+              model={model}
+              onModelChange={onModelChange}
+              streaming={streaming}
+              availableProviders={availableProviders}
+            />
+          </div>
+
+          {/* View toggle — pinned right */}
+          <div className="shrink-0 pb-1">
+            <ViewToggle mode={viewMode} onChange={handleViewModeChange} />
+          </div>
         </div>
       </div>
     </div>

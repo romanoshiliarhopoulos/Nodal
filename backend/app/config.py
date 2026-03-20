@@ -3,6 +3,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
     environment: str = "development"
+    skip_auth: bool = False
 
     # Firebase
     firebase_service_account_path: str = "service-account.json"

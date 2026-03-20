@@ -13,12 +13,33 @@ Keys are encrypted with AES-256-GCM before storage and never returned to the cli
 from fastapi import APIRouter, Depends, HTTPException
 from google.cloud.firestore_v1 import DELETE_FIELD
 
-from app.auth import get_firebase_user
+from app.auth import get_firebase_user, get_user_id
+from app.config import settings
 from app.db import get_db
 from app.encryption import encrypt_key
 from app.models import KeyUpsert
 
 router = APIRouter()
+
+
+@router.get("/available")
+async def available_providers(user_id: str = Depends(get_user_id)):
+    """Return which providers have a usable key (server env key OR user BYOK)."""
+    available: set[str] = set()
+    if settings.groq_api_key:
+        available.add("groq")
+    if settings.openai_api_key:
+        available.add("openai")
+    if settings.anthropic_api_key:
+        available.add("anthropic")
+    try:
+        doc = get_db().collection("users").document(user_id).get()
+        if doc.exists:
+            for p in doc.to_dict().get("encrypted_keys", {}):
+                available.add(p)
+    except Exception:
+        pass
+    return {"available": sorted(available)}
 
 
 @router.get("")

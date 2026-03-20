@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import type { User } from "firebase/auth";
 
-const API = "http://localhost:8001";
+const API = import.meta.env.DEV ? "http://localhost:8001" : "";
 
 const PROVIDERS = [
   { id: "groq", label: "Groq", placeholder: "gsk_..." },
@@ -25,7 +25,10 @@ export default function AccountPage({ user, onClose }: AccountPageProps) {
 
   async function getHeaders() {
     const token = await user.getIdToken();
-    return { "Content-Type": "application/json", Authorization: `Bearer ${token}` };
+    return {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    };
   }
 
   async function loadKeys() {
@@ -41,7 +44,9 @@ export default function AccountPage({ user, onClose }: AccountPageProps) {
     } catch {}
   }
 
-  useEffect(() => { loadKeys(); }, []);
+  useEffect(() => {
+    loadKeys();
+  }, []);
 
   async function saveKey(providerId: string) {
     const key = inputs[providerId]?.trim();
@@ -57,13 +62,13 @@ export default function AccountPage({ user, onClose }: AccountPageProps) {
       });
       if (res.ok) {
         setStoredProviders((prev) =>
-          prev.includes(providerId) ? prev : [...prev, providerId]
+          prev.includes(providerId) ? prev : [...prev, providerId],
         );
         setInputs((prev) => ({ ...prev, [providerId]: "" }));
         setSuccess((prev) => ({ ...prev, [providerId]: true }));
         setTimeout(
           () => setSuccess((prev) => ({ ...prev, [providerId]: false })),
-          2000
+          2000,
         );
       } else {
         setErrors((prev) => ({ ...prev, [providerId]: "Failed to save key" }));
@@ -104,7 +109,12 @@ export default function AccountPage({ user, onClose }: AccountPageProps) {
             className="p-1.5 rounded-md text-gray-500 hover:text-gray-200 hover:bg-gray-800 transition-colors"
           >
             <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
-              <path d="M2 2l11 11M13 2L2 13" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+              <path
+                d="M2 2l11 11M13 2L2 13"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+              />
             </svg>
           </button>
         </div>
@@ -119,7 +129,9 @@ export default function AccountPage({ user, onClose }: AccountPageProps) {
             </div>
           )}
           <div className="min-w-0">
-            <p className="text-sm font-medium text-gray-200 truncate">{user.displayName}</p>
+            <p className="text-sm font-medium text-gray-200 truncate">
+              {user.displayName}
+            </p>
             <p className="text-xs text-gray-500 truncate">{user.email}</p>
           </div>
         </div>
@@ -131,7 +143,8 @@ export default function AccountPage({ user, onClose }: AccountPageProps) {
               API Keys
             </h3>
             <p className="text-xs text-gray-600 leading-relaxed">
-              Bring your own keys to use any supported model. Keys are AES-256 encrypted before storage.
+              Bring your own keys to use any supported model. Keys are AES-256
+              encrypted before storage.
             </p>
           </div>
 
@@ -139,9 +152,14 @@ export default function AccountPage({ user, onClose }: AccountPageProps) {
             {PROVIDERS.map((provider) => {
               const stored = storedProviders.includes(provider.id);
               return (
-                <div key={provider.id} className="rounded-lg border border-gray-800 bg-gray-900 p-3">
+                <div
+                  key={provider.id}
+                  className="rounded-lg border border-gray-800 bg-gray-900 p-3"
+                >
                   <div className="flex items-center justify-between mb-2.5">
-                    <span className="text-xs font-medium text-gray-300">{provider.label}</span>
+                    <span className="text-xs font-medium text-gray-300">
+                      {provider.label}
+                    </span>
                     {stored && (
                       <div className="flex items-center gap-2.5">
                         <span className="flex items-center gap-1 text-xs text-emerald-500">
@@ -163,22 +181,37 @@ export default function AccountPage({ user, onClose }: AccountPageProps) {
                       type="password"
                       value={inputs[provider.id] ?? ""}
                       onChange={(e) =>
-                        setInputs((prev) => ({ ...prev, [provider.id]: e.target.value }))
+                        setInputs((prev) => ({
+                          ...prev,
+                          [provider.id]: e.target.value,
+                        }))
                       }
-                      placeholder={stored ? "Replace key…" : provider.placeholder}
+                      placeholder={
+                        stored ? "Replace key…" : provider.placeholder
+                      }
                       className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded-md px-2.5 py-1.5 text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-gray-500 transition-colors"
-                      onKeyDown={(e) => { if (e.key === "Enter") saveKey(provider.id); }}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") saveKey(provider.id);
+                      }}
                     />
                     <button
                       onClick={() => saveKey(provider.id)}
-                      disabled={saving === provider.id || !inputs[provider.id]?.trim()}
+                      disabled={
+                        saving === provider.id || !inputs[provider.id]?.trim()
+                      }
                       className="shrink-0 px-3 py-1.5 rounded-md bg-indigo-600 hover:bg-indigo-500 disabled:bg-gray-800 disabled:text-gray-600 text-xs text-white transition-colors"
                     >
-                      {success[provider.id] ? "Saved ✓" : saving === provider.id ? "Saving…" : "Save"}
+                      {success[provider.id]
+                        ? "Saved ✓"
+                        : saving === provider.id
+                          ? "Saving…"
+                          : "Save"}
                     </button>
                   </div>
                   {errors[provider.id] && (
-                    <p className="text-xs text-red-400 mt-1.5">{errors[provider.id]}</p>
+                    <p className="text-xs text-red-400 mt-1.5">
+                      {errors[provider.id]}
+                    </p>
                   )}
                 </div>
               );

@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import type { User } from "firebase/auth";
 import type { Conversation } from "./types";
 
-const API = "http://localhost:8001";
+const API = import.meta.env.DEV ? "http://localhost:8001" : "";
 
 interface SearchResult {
   conversation_id: string;
