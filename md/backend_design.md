@@ -1,231 +1,252 @@
-# Nodal Backend Architecture & Integration Guide
+# Nodal Backend — Structure & DB Schema
 
-This document outlines the design of the FastAPI backend for Nodal, focusing on multi-user isolation, secure Bring Your Own Key (BYOK) handling, LiteLLM integration, and real-time streaming with advanced model features like "thinking".
+## File Structure
+
+```
+backend/app/
+  main.py             # FastAPI app, CORS, Firebase Admin init
+  config.py           # Settings (pydantic-settings, reads .env)
+  auth.py             # Identity dependencies (Firebase + anonymous session)
+  db.py               # init_firebase() + get_db() → Firestore client
+  encryption.py       # AES-256-GCM encrypt/decrypt + Secret Manager key fetch
+  context_engine.py   # Token budget, hierarchical summarisation, system prompt
+  models.py           # Pydantic request models
+  routers/
+    session.py        # GET /api/session
+    chat.py           # Conversations + nodes + streaming
+    keys.py           # BYOK key management
+```
+
+Run: `poetry run uvicorn app.main:app --reload --port 8001`
 
 ---
 
-## 1. Project Setup & Dependency Management (Poetry)
+## Auth / Identity
 
-We use Poetry to manage the Python environment and dependencies to ensure deterministic, reproducible builds.
+Two identity models run in parallel.
 
-### Initializing the Backend
+**Anonymous (cookie)**
+- `GET /api/session` — called on page load. If no cookie: generates UUID, creates `users` doc, sets `nodal_session` httpOnly cookie (1yr).
+- Dependency `get_session_id` — reads cookie or raises 401.
 
-```bash
-cd backend
-poetry init
-# Add the core dependencies:
-poetry add fastapi uvicorn litellm
-poetry add sse-starlette pydantic
-poetry add firebase-admin google-cloud-firestore google-cloud-secret-manager
-poetry add cryptography  # For AES backend encryption
-```
+**Firebase (Bearer token)**
+- Frontend sends `Authorization: Bearer <firebase_id_token>`.
+- Dependency `get_firebase_user` — verifies token via `firebase_admin.auth.verify_id_token()`, returns decoded token dict. Used by keys endpoints (requires a real uid).
+- Dependency `get_user_id` — tries Bearer first, falls back to cookie. Used by all chat endpoints.
 
-**To run the server locally:**
-
-```bash
-poetry run uvicorn app.main:app --reload
-```
+Keys endpoints always require Firebase auth. Chat endpoints accept either.
 
 ---
 
-## 2. Infrastructure Prerequisites (Action Required!)
+## Firestore Schema
 
-Before writing the Auth logic, you must manually set up the following cloud services:
+### `users/{user_id}`
 
-1. **Firebase Project**:
-   - Go to the Firebase Console -> Add Project.
-   - Enable **Authentication** (Google OAuth and Email/Password).
-   - Generate a **Service Account Private Key** (JSON) from Project Settings -> Service Accounts. Save this locally strictly for testing (do not commit it).
-2. **Google Cloud Platform (GCP)**:
-   - Your Firebase project is also a GCP project. Enable the **Cloud Firestore API** and **Secret Manager API**.
-   - Create a Master Secret in Secret Manager called `nodal-encryption-master-key`.
-   - Setup Cloud Run IAM permissions later during deployment.
+`user_id` is either the anonymous session UUID or the Firebase uid.
 
----
-
-## 3. Multi-User Authentication & API Design
-
-FastAPI will verify JSON Web Tokens (JWT) issued by Firebase from the frontend. This ensures we safely isolate users and only access the databases (Firestore) scoped to their `uid`.
-
-### Auth Middleware / Dependency
-
-```python
-# app/auth.py
-from fastapi import Depends, HTTPException, Security
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-import firebase_admin
-from firebase_admin import credentials, auth
-
-# Initialize Firebase (Requires the service account JSON in dev, auto-detects in prod)
-cred = credentials.Certificate("service-account-file.json")
-firebase_admin.initialize_app(cred)
-
-security = HTTPBearer()
-
-def get_current_user(credentials: HTTPAuthorizationCredentials = Security(security)):
-    token = credentials.credentials
-    try:
-        decoded_token = auth.verify_id_token(token)
-        # Returns the decoded token containing the user's robust `uid`
-        return decoded_token
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid auth credentials")
 ```
-
-### Example Protected Endpoint
-
-```python
-from fastapi import APIRouter, Depends
-
-router = APIRouter()
-
-@router.get("/trees")
-async def get_user_trees(user: dict = Depends(get_current_user)):
-    uid = user["uid"]
-    # Fetch trees ONLY belonging to this uid from Firestore
-    trees = fetch_trees_for_user(uid)
-    return trees
+id:             string
+is_anonymous:   bool
+email:          string|null
+default_model:  string              — e.g. "groq/llama-3.3-70b-versatile"
+encrypted_keys: map                 — provider → {nonce: str, ct: str} (AES-256-GCM)
+created_at:     timestamp
 ```
 
 ---
 
-## 4. LiteLLM Integration & Model Routing
+### `conversations/{conv_id}`
 
-LiteLLM forces all providers into the OpenAI API format. To support BYOK, we pass the user's decrypted key at call-time.
+One document per conversation (= one tree).
 
-```python
-# app/llm_gateway.py
-import litellm
-
-# Provide an abstraction for the rest of your app
-async def get_llm_stream(messages: list, model_name: str, api_key: str):
-    """
-    model_name format examples:
-        - 'gpt-4o'
-        - 'anthropic/claude-3-opus-20240229'
-        - 'gemini/gemini-1.5-pro'
-    """
-    response = await litellm.acompletion(
-        model=model_name,
-        messages=messages,
-        api_key=api_key,
-        stream=True
-    )
-    return response
+```
+id:           string
+user_id:      string        — owner's uid or session_id
+title:        string        — auto-generated from first exchange, or user-set
+model:        string        — default model for this conversation
+root_node_id: string|null   — null until first message is sent
+created_at:   timestamp
+updated_at:   timestamp     — bumped on every new node
 ```
 
 ---
 
-## 5. Streaming Design & "Thinking" Bytes
+### `conversations/{conv_id}/nodes/{node_id}`
 
-When users talk to a modern AI chatbot, they see the text spool out character by character. To achieve this, your backend needs to return a **Server-Sent Events (SSE)** stream.
+Subcollection. Each node = one exchange: one user prompt + one assistant response.
 
-Furthermore, newer reasoning models (like `claude-3-7-sonnet` with thinking enabled or `o1/o3-mini`) output internal monologue / reasoning tokens _before_ their final answer. LiteLLM normalizes these into a `reasoning_content` field. We want to stream both so the frontend can build a cool expanding "Thinking" UI block.
+```
+id:           string
+parent_id:    string|null   — null = root node
+children_ids: string[]      — IDs of direct child nodes (branches)
+prompt:       string        — user message
+response:     string        — assistant response (empty while streaming)
+model:        string        — model used for this specific node
+is_streaming: bool          — true while response is being generated
+created_at:   timestamp
+```
 
-### The Chat Stream Endpoint
+**Tree rules:**
+- `root_node_id` on the conversation is the only entry pointer needed
+- Any node can have multiple children → each is an independent branch
+- Siblings never share context; only the direct ancestor chain is passed to the model
+- To branch: send a message with `parent_node_id` set to any existing node
 
-```python
-# app/routers/chat.py
-from fastapi import APIRouter, Depends
-from sse_starlette.sse import EventSourceResponse
-import json
+---
 
-router = APIRouter()
+### `messages/{message_id}`
 
-async def generate_chat_events(messages, model, api_key):
-    try:
-        stream = await get_llm_stream(messages, model, api_key)
+Flat denormalized copy of every completed exchange. For search and analytics only — not used for rendering.
 
-        async for chunk in stream:
-            # LiteLLM yields a chunk object mimicking OpenAI's structure
-            delta = chunk.choices[0].delta
-
-            # Check for AI "Thinking" or reasoning strings
-            if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
-                yield {
-                    "event": "message",
-                    "data": json.dumps({"type": "reasoning", "content": delta.reasoning_content})
-                }
-
-            # Check for standard response text
-            elif hasattr(delta, 'content') and delta.content:
-                yield {
-                    "event": "message",
-                    "data": json.dumps({"type": "content", "content": delta.content})
-                }
-
-        # Send a final termination event
-        yield {
-            "event": "done",
-            "data": json.dumps({"type": "done", "content": ""})
-        }
-
-    except Exception as e:
-        yield {
-            "event": "error",
-            "data": json.dumps({"error": str(e)})
-        }
-
-@router.post("/chat/{node_id}")
-async def chat(node_id: str, payload: dict, user: dict = Depends(get_current_user)):
-    uid = user["uid"]
-    model = payload.get("model")
-
-    # 1. Decrypt keys
-    keys = get_decrypted_user_keys(uid)
-    provider = model.split("/")[0] if "/" in model else "openai"
-    api_key = keys.get(provider)
-
-    # 2. Rebuild the context specific to THIS node / branch trajectory
-    messages = build_context_for_node(node_id, uid)
-
-    # 3. Stream back to the frontend using SSE
-    return EventSourceResponse(generate_chat_events(messages, model, api_key))
+```
+user_id:         string
+conversation_id: string
+node_id:         string
+prompt:          string
+response:        string
+model:           string
+created_at:      timestamp
 ```
 
 ---
 
-## 6. Frontend Interface Contract
+## API Endpoints
 
-With the SSE endpoint created, your React frontend will consume this byte-by-byte using the native browser `EventSource` API or libraries like `@microsoft/fetch-event-source` (which allows POST requests).
+### Session
 
-### React Pseudo-Code Integration
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/session` | none | Init or retrieve session; sets cookie on first call |
 
-```javascript
-import { fetchEventSource } from "@microsoft/fetch-event-source";
+### Chat
 
-async function streamResponse(nodeId, model, userAuthToken) {
-  let textContent = "";
-  let thinkingContent = "";
+| Method | Path | Auth | Body | Description |
+|--------|------|------|------|-------------|
+| `POST` | `/api/chat/conversations` | cookie or Bearer | `{title?, model?}` | Create conversation |
+| `GET` | `/api/chat/conversations` | cookie or Bearer | — | List user's conversations |
+| `GET` | `/api/chat/conversations/{id}` | cookie or Bearer | — | Conversation doc + all nodes as `{id: node}` map |
+| `PATCH` | `/api/chat/conversations/{id}` | cookie or Bearer | `{title}` | Rename conversation |
+| `DELETE` | `/api/chat/conversations/{id}` | cookie or Bearer | — | Delete conversation, all nodes, all messages |
+| `POST` | `/api/chat/conversations/{id}/nodes` | cookie or Bearer | `{prompt, parent_node_id?, model?}` | Send message, stream SSE response |
 
-  await fetchEventSource(`https://api.nodal.app/chat/${nodeId}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${userAuthToken}`, // Firebase Token
-    },
-    body: JSON.stringify({ model: model }),
-    onmessage(msg) {
-      if (msg.event === "done") {
-        console.log("Stream finished");
-        return;
-      }
+### Keys (BYOK)
 
-      const payload = JSON.parse(msg.data);
-      if (payload.type === "reasoning") {
-        thinkingContent += payload.content;
-        updateThinkingComponent(thinkingContent);
-      } else if (payload.type === "content") {
-        textContent += payload.content;
-        updateMessageBubble(textContent);
-      }
-    },
-  });
-}
+| Method | Path | Auth | Body | Description |
+|--------|------|------|------|-------------|
+| `GET` | `/api/keys` | Firebase Bearer | — | List providers with stored keys (names only, no key material) |
+| `POST` | `/api/keys` | Firebase Bearer | `{provider, api_key}` | Encrypt and store a key |
+| `DELETE` | `/api/keys/{provider}` | Firebase Bearer | — | Remove a provider's key |
+
+---
+
+## Tree Traversal
+
+The conversation document only stores `root_node_id`. The nodes form a complete bidirectional graph:
+
+- **Down (render):** follow `children_ids` from root
+- **Up (context):** follow `parent_id` from any node to root
+
+`GET /conversations/{id}` returns all nodes as a flat `{node_id: node}` map. The frontend builds the visual tree from that.
+
+---
+
+## Context Management (`context_engine.py`)
+
+On every `POST .../nodes`, the backend walks the ancestor chain and passes it through the context engine before calling LiteLLM.
+
+### Token budget
+
+```
+budget = context_window[model] - 4096 (response reserve) - 512 (system prompt reserve)
 ```
 
-### Final Next Steps for Backend
+Known context windows are defined in `CONTEXT_WINDOWS` dict. Unknown models fall back to 8192.
 
-1. **Initialize Poetry** under the `backend` folder as configured above.
-2. Initialize **Firebase and GCP Settings**.
-3. Let me know when you've done those steps, and we can begin drafting the AES encryption layer for storing keys!
+### Flow
+
+```
+_node_path(db, conv_id, parent_node_id)
+  → follows parent_id upward to root, reverses → [root, ..., parent]
+
+build_context(ancestors, new_prompt, model, api_key)
+  → converts ancestors to [user, assistant, ...] messages
+  → counts tokens via litellm.token_counter() (char-based fallback if unavailable)
+  → if fits in budget: returns verbatim
+  → if over budget: iteratively summarises oldest half of ancestors via a secondary
+    LiteLLM call, keeping the 2 most recent exchanges verbatim
+  → returns (messages, system_prompt)
+```
+
+### System prompt
+
+Injected on every request. Tells the model its position in the tree:
+
+```
+"You are an AI assistant inside a branching conversation tree.
+This branch is N exchange(s) deep. The root of this conversation was: "...".
+You only see the direct ancestor path — sibling branches are not visible to you."
+```
+
+### Summarisation
+
+When ancestors exceed the budget, the oldest nodes are compressed via:
+```
+model=same model, max_tokens=512
+prompt: "Summarise the following conversation excerpt concisely..."
+```
+The summary replaces the raw nodes in context. Raw content is always preserved in Firestore.
+
+**Phase 3 addition (planned):** embed each ancestor; rank by cosine similarity to current prompt; include top-K instead of recency-based truncation.
+
+---
+
+## Send Message Flow
+
+1. Verify `conv.user_id == user_id` (ownership check)
+2. Resolve API key: try to decrypt user's BYOK key for the model's provider → fall back to server env key if none stored
+3. Walk `parent_node_id → root` via `_node_path()`
+4. Call `build_context(ancestors, prompt, model, api_key)` → `(messages, system_prompt)`
+5. Prepend `{role: system, content: system_prompt}` to messages
+6. Write new node to Firestore immediately: `response: ""`, `is_streaming: true`
+7. Attach `node_id` to `parent.children_ids` (ArrayUnion)
+8. Set `conv.root_node_id` if first node; bump `conv.updated_at`
+9. Stream via `litellm.acompletion(stream=True, api_key=user_key_or_none)`:
+   - `{"type": "chunk", "content": "..."}` — each token
+   - `{"type": "done", "node_id": "..."}` — stream complete
+   - `{"type": "error", "message": "..."}` — on failure
+10. On done: persist `node.response`, set `is_streaming: false`
+11. Write to `messages` collection (flat copy)
+12. Fire-and-forget `_auto_title()` if this was the root node
+
+---
+
+## BYOK Encryption (`encryption.py`)
+
+Master key source (priority order):
+1. **Google Cloud Secret Manager** — `GCP_PROJECT` + `SECRET_MANAGER_KEY_NAME` in `.env`
+2. **`MASTER_KEY_DEV`** — base64-encoded 32 random bytes, local dev only
+
+```
+Generate local dev key:
+  python -c "import os,base64; print(base64.urlsafe_b64encode(os.urandom(32)).decode())"
+```
+
+Each provider key is encrypted independently using **AES-256-GCM**:
+- Random 12-byte nonce per encryption
+- 16-byte authentication tag appended to ciphertext by GCM automatically
+- Stored in Firestore as `{nonce: base64, ct: base64}`
+- Plaintext key only exists in memory during the request; never logged or returned
+
+The master key is cached in memory after first fetch (module-level singleton).
+
+---
+
+## LiteLLM
+
+Model strings use `provider/model` format:
+
+- `groq/llama-3.3-70b-versatile`
+- `anthropic/claude-3-5-sonnet-20241022`
+- `openai/gpt-4o`
+
+Server-level env keys (`GROQ_API_KEY` etc.) are loaded into `os.environ` at startup as fallbacks. When a user has a BYOK key for the provider, it is passed directly as `api_key=` to `litellm.acompletion()` and takes priority.
