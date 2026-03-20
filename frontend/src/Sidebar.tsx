@@ -10,6 +10,8 @@ interface SidebarProps {
   currentConvId: string | null;
   activePanel: Panel;
   hasActivePrompt: boolean;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
   onSelect: (id: string) => void;
   onNew: () => void;
   onDelete: (id: string) => void;
@@ -20,12 +22,42 @@ interface SidebarProps {
   onOpenPrompts: () => void;
 }
 
+const NodalLogo = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="24" height="24">
+    <rect width="32" height="32" rx="7" fill="#111111"/>
+    <g fill="#ffffff">
+      <circle cx="8" cy="7" r="2.2"/>
+      <circle cx="8" cy="13" r="2.2"/>
+      <circle cx="8" cy="19" r="2.2"/>
+      <circle cx="8" cy="25" r="2.2"/>
+      <circle cx="14" cy="7" r="2.2"/>
+      <circle cx="14" cy="11" r="2.2"/>
+      <circle cx="14" cy="25" r="2.2"/>
+      <circle cx="20" cy="7" r="2.2"/>
+      <circle cx="20" cy="21" r="2.2"/>
+      <circle cx="20" cy="25" r="2.2"/>
+      <circle cx="24" cy="7" r="2.2"/>
+      <circle cx="24" cy="13" r="2.2"/>
+      <circle cx="24" cy="19" r="2.2"/>
+      <circle cx="24" cy="25" r="2.2"/>
+    </g>
+    <g fill="#333333">
+      <circle cx="14" cy="15" r="2.2"/>
+      <circle cx="14" cy="19" r="2.2"/>
+      <circle cx="20" cy="11" r="2.2"/>
+      <circle cx="20" cy="15" r="2.2"/>
+    </g>
+  </svg>
+);
+
 export default function Sidebar({
   user,
   conversations,
   currentConvId,
   activePanel,
   hasActivePrompt,
+  collapsed,
+  onToggleCollapse,
   onSelect,
   onNew,
   onDelete,
@@ -49,15 +81,59 @@ export default function Sidebar({
     return () => document.removeEventListener("mousedown", onClickOutside);
   }, []);
 
+  if (collapsed) {
+    return (
+      <div className="flex flex-col items-center w-full h-full border-r border-gray-800 bg-gray-950 py-3 gap-2">
+        {/* Logo */}
+        <button
+          onClick={onToggleCollapse}
+          className="p-1.5 rounded-lg hover:bg-gray-800 transition-colors"
+          title="Expand sidebar"
+        >
+          <NodalLogo />
+        </button>
+        {/* Expand arrow */}
+        <button
+          onClick={onToggleCollapse}
+          className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-800 hover:text-gray-300 transition-colors"
+          title="Expand sidebar"
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M5 3l4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </button>
+        {/* New tree */}
+        <button
+          onClick={onNew}
+          className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-800 hover:text-gray-300 transition-colors mt-1"
+          title="New Tree"
+        >
+          <svg width="15" height="15" viewBox="0 0 15 15" fill="none">
+            <path d="M7.5 2v11M2 7.5h11" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+        </button>
+      </div>
+    );
+  }
+
   return (
     <div className="flex flex-col w-full h-full border-r border-gray-800 bg-gray-950">
       {/* Header */}
-      <div className="px-4 py-4 border-b border-gray-800">
+      <div className="px-4 py-4 border-b border-gray-800 flex items-center justify-between">
         <button
           onClick={onNew}
           className="text-base font-semibold text-gray-100 tracking-tight hover:text-white transition-colors"
         >
           Nodal
+        </button>
+        <button
+          onClick={onToggleCollapse}
+          className="p-1 rounded-lg text-gray-500 hover:bg-gray-800 hover:text-gray-300 transition-colors"
+          title="Collapse sidebar"
+        >
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none">
+            <path d="M9 3L5 7l4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
         </button>
       </div>
 

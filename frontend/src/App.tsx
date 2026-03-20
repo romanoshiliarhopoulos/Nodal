@@ -76,8 +76,9 @@ export default function App() {
   const [streaming, setStreaming] = useState(false);
   const [branchTarget, setBranchTarget] = useState<BranchTarget | null>(null);
 
-  // Sidebar resize
+  // Sidebar resize & collapse
   const [sidebarWidth, setSidebarWidth] = useState(256);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const resizing = useRef(false);
 
   // Account panel
@@ -478,8 +479,8 @@ export default function App() {
     <div className="flex h-screen bg-gray-950 text-gray-100 overflow-hidden">
       {/* Sidebar with resizable width */}
       <div
-        style={{ width: sidebarWidth, flexShrink: 0 }}
-        className="relative flex"
+        style={{ width: sidebarCollapsed ? 48 : sidebarWidth, flexShrink: 0 }}
+        className="relative flex transition-[width] duration-200"
       >
         <Sidebar
           user={user}
@@ -487,6 +488,8 @@ export default function App() {
           currentConvId={currentConvId}
           activePanel={panel}
           hasActivePrompt={activeSystemPrompt !== null}
+          collapsed={sidebarCollapsed}
+          onToggleCollapse={() => setSidebarCollapsed((v) => !v)}
           onSelect={(id) => {
             selectConversation(id);
             setPanel("chat");
@@ -506,15 +509,17 @@ export default function App() {
             setPanel((p) => (p === "prompts" ? "chat" : "prompts"))
           }
         />
-        {/* Drag handle */}
-        <div
-          className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-500/30 transition-colors z-10"
-          onMouseDown={() => {
-            resizing.current = true;
-            document.body.style.cursor = "col-resize";
-            document.body.style.userSelect = "none";
-          }}
-        />
+        {/* Drag handle (only when expanded) */}
+        {!sidebarCollapsed && (
+          <div
+            className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-indigo-500/30 transition-colors z-10"
+            onMouseDown={() => {
+              resizing.current = true;
+              document.body.style.cursor = "col-resize";
+              document.body.style.userSelect = "none";
+            }}
+          />
+        )}
       </div>
 
       {panel === "search" && (
