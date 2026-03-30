@@ -3,3 +3,4 @@ service-account.json
 backend/service-account.json
 backend/.env
 .claude
+.firebase   
